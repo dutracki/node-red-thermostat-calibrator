@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-12-05
+
+### Fixed
+- **CRITICAL**: Fixed infinite loop causing rapid calibration updates
+  - Added filtering for `/set` command topics to prevent processing outgoing commands
+  - Implemented 5-second cooldown timer between calibration updates per location
+  - Improved loop prevention with timestamp-based cooldown mechanism
+  - Thermostats now properly stabilize instead of continuously recalibrating
+
+### Details
+The infinite loop occurred because:
+1. Calibration commands triggered immediate thermostat state broadcasts
+2. The function processed its own outgoing `/set` commands
+3. No cooldown allowed the loop to continue indefinitely
+
+**Impact**: Users running v1.0.0 experienced continuous MQTT traffic and never-converging calibration values.
+
+---
+
 ## [1.0.0] - 2025-12-05
 
 ### Added

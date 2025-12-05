@@ -78,6 +78,11 @@ function identifyDevice(topic) {
 
 // --- MAIN LOGIC ---
 
+// 0. FILTER OUT COMMAND TOPICS (we only want status updates, not our own commands)
+if (msg.topic && msg.topic.endsWith('/set')) {
+    return null;
+}
+
 // 1. IDENTIFY CONTEXT
 const deviceContext = identifyDevice(msg.topic);
 
@@ -89,6 +94,17 @@ if (!deviceContext) {
 
 const location = deviceContext.id;
 const lastSeenValue = msg.payload?.last_seen || null;
+
+// 1.5 CHECK COOLDOWN - prevent rapid recalculations
+const cooldownKey = `${CONFIG.storePrefix}cooldown_${location}`;
+const lastUpdateTime = flow.get(cooldownKey, CONFIG.contextStore) || 0;
+const now = Date.now();
+const COOLDOWN_MS = 5000; // 5 seconds cooldown after each calibration change
+
+if ((now - lastUpdateTime) < COOLDOWN_MS) {
+    // Still in cooldown period, skip processing
+    return null;
+}
 
 // 2. DEDUPLICATION
 if (lastSeenValue) {
@@ -169,6 +185,9 @@ if (
 
         // Optimistic update to prevent loops
         flow.set(`${CONFIG.storePrefix}currentCal_${location}`, newCalibration, CONFIG.contextStore);
+
+        // Set cooldown timestamp
+        flow.set(cooldownKey, Date.now(), CONFIG.contextStore);
 
         return msg;
     } else {
