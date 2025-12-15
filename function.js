@@ -14,15 +14,11 @@ const CONFIG = {
     // Enable detailed logging for debugging regex, weights, and calculations
     debug: true,
 
-    // Rate Limiting: Max actions per time window
-    throttle: {
-        limit: 5,           // Max number of calibration actions...
-        windowSeconds: 3600 // ...per this many seconds (1 hour)
-    },
-
     // Per-Location Overrides
     locations: {
-        // Example: "office": { throttle: { limit: 10, windowSeconds: 1800 } }
+        "office": {
+            // Device-specific settings can go here (e.g. specific debounce?)
+        }
     },
 
     // Calibration precision
@@ -133,55 +129,6 @@ function getWeightForAge(ageMinutes) {
     return 0; // Too old
 }
 
-/**
- * Checks if a location has exceeded its action rate limit.
- * @context Stability - Prevents "flip-flopping" or spamming Zigbee network.
- * @param {string} location - The location ID to check.
- * @param {number} nowTs - Current timestamp.
- * @returns {boolean} True if allowed, False if blocked.
- * @sideeffect Prunes old history entries in flow context.
- */
-function checkRateLimit(location, nowTs) {
-    // 1. Get Config (Location specific or Global)
-    let limit = CONFIG.throttle.limit;
-    let windowSeconds = CONFIG.throttle.windowSeconds;
-
-    if (CONFIG.locations && CONFIG.locations[location] && CONFIG.locations[location].throttle) {
-        limit = CONFIG.locations[location].throttle.limit;
-        windowSeconds = CONFIG.locations[location].throttle.windowSeconds;
-    }
-
-    // 2. Fetch History
-    const historyKey = `${CONFIG.storePrefix}history_${location}`;
-    let history = flow.get(historyKey, CONFIG.contextStore) || [];
-
-    // 3. Prune old entries
-    const cutoff = nowTs - (windowSeconds * 1000);
-    history = history.filter(ts => ts > cutoff);
-
-    // 4. Check Limit
-    if (history.length >= limit) {
-        if (CONFIG.debug) log(`Rate limit exceeded for ${location}: ${history.length}/${limit} in last ${windowSeconds}s`);
-
-        // Save pruned history back even if blocked
-        flow.set(historyKey, history, CONFIG.contextStore);
-        return false;
-    }
-
-    // 5. Add new timestamp
-    flow.set(historyKey, history, CONFIG.contextStore);
-
-    return true;
-}
-
-// recordAction: Helper to add timestamp to history
-function recordAction(location, nowTs) {
-    const historyKey = `${CONFIG.storePrefix}history_${location}`;
-    let history = flow.get(historyKey, CONFIG.contextStore) || [];
-    history.push(nowTs);
-    flow.set(historyKey, history, CONFIG.contextStore);
-}
-
 // --- MAIN LOGIC ---
 
 if (CONFIG.debug) {
@@ -272,6 +219,17 @@ if (deviceContext.type === 'sensor') {
 
     if (CONFIG.debug) log(`Updating Thermostat Setup for '${location}': Temp=${currentLocalTemp}, Cal=${currentCalibration}`);
 
+    // 3b. EARLY EXIT (Feedback Loop Prevention)
+    // @intent: If we just sent a command, the thermostat sends an update. We must update state (above) but NOT trigger a new calculation.
+    const cooldownKey = `${CONFIG.storePrefix}cooldown_${location}`;
+    const lastUpdateTime = flow.get(cooldownKey, CONFIG.contextStore) || 0;
+    const COOLDOWN_MS = 5000;
+
+    if ((now - lastUpdateTime) < COOLDOWN_MS) {
+        if (CONFIG.debug) log(`[Info] Updates saved, but calculation suppressed due to recent action (Echo suppression).`);
+        return null;
+    }
+
     // proceed to Calculation...
 }
 
@@ -345,14 +303,7 @@ if (newCalibration !== storedCal) {
         return null;
     }
 
-    // 5b. RATE LIMIT CHECK
-    // @intent: Prevent API spamming/abuse over longer periods (e.g., 60 minutes).
-    if (!checkRateLimit(location, now)) {
-        node.warn(`[Throttle] ${location} | Action skipped: Rate limit exceeded.`);
-        return null;
-    }
-
-    // 5c. EXECUTE COMMAND
+    // 5b. EXECUTE COMMAND
     node.warn(`[Action] ${location} | Calibrating: ${storedCal} -> ${newCalibration} (AvgSensor: ${avgSensorTemp.toFixed(2)}, Thermo: ${storedThermoTemp})`);
 
     msg.topic = `${targetTopic}/set`;
@@ -362,9 +313,6 @@ if (newCalibration !== storedCal) {
 
     flow.set(`${CONFIG.storePrefix}currentCal_${location}`, newCalibration, CONFIG.contextStore);
     flow.set(cooldownKey, now, CONFIG.contextStore);
-
-    // @sideeffect: Record Action for Rate Limiting history
-    recordAction(location, now);
 
     return msg;
 } else {

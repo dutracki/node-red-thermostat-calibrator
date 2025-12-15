@@ -141,65 +141,34 @@ runTest("Cooldown Data Ingestion Fix", () => {
     assert(readings['zigbee2mqtt/temp_office'].temp === 30, "Temperature should be stored");
 });
 
-runTest("Rate Limiting Verification", () => {
-    // 1. Setup Throttle (Limit: 2 per 60 seconds for test speed)
-
-    let testFnBody = functionBody.replace(
-        /throttle: \{[^}]+\}/,
-        'throttle: { limit: 2, windowSeconds: 60 }'
-    );
-    // Remove the cooldown check for this test to focus on Rate Limit
-    testFnBody = testFnBody.replace('const COOLDOWN_MS = 5000;', 'const COOLDOWN_MS = 0;');
+runTest("Feedback Loop (Echo) Suppression", () => {
+    // Standard Config
+    let testFnBody = functionBody; // Use default Logic
 
     const runTestFn = new Function('msg', 'flow', 'node', testFnBody);
 
-    // Clear state
-    flow.set('thermoCal_history_office', []);
-    flow.set('thermoCal_cooldown_office', 0);
+    // 1. Setup Initial State
+    const locId = 'office';
+    const now = Date.now();
+    flow.set(`thermoCal_cooldown_${locId}`, now); // Just acted!
+    flow.set(`thermoCal_thermoTemp_${locId}`, 20);
+    flow.set(`thermoCal_topicName_${locId}`, `zigbee2mqtt/thermostat_${locId}`);
 
-    const baseMsg = {
-        topic: 'zigbee2mqtt/thermostat_office',
-        payload: { local_temperature: 20, local_temperature_calibration: 0 }
+    // 2. Incoming "Echo" message (from the action we just did)
+    // It comes 100ms after the action
+    const msg = {
+        topic: `zigbee2mqtt/thermostat_${locId}`,
+        payload: { local_temperature: 20, local_temperature_calibration: 1 }, // Updated cal
+        ts: now + 100
     };
 
-    // Helper to setup sensor state so calibration is always needed
-    // Target Cal = 10 (Sensor 30, Thermo 20)
-    flow.set('thermoCal_sensorReadings_office', {
-        'zigbee2mqtt/temp_test': { temp: 30, ts: 9999999999999, baseWeight: 1 } // Future timestamp so no decay
-    });
-    flow.set('thermoCal_thermoTemp_office', 20);
-    flow.set('thermoCal_topicName_office', 'zigbee2mqtt/thermostat_office');
+    // 3. Execution
+    const res = runTestFn(msg, flow, node);
 
-    // ACTION 1 (Allowed)
-    console.log("  > Triggering Action 1 (Should Pass)");
-    let res1 = runTestFn({ ...baseMsg, ts: Date.now() }, flow, node);
-    assert(res1 !== null, "Action 1 should pass");
+    // 4. Assertion
+    assert(res === null, "Echo message should be suppressed (return null)");
 
-    // ACTION 2 (Allowed)
-    console.log("  > Triggering Action 2 (Should Pass)");
-    // Need to change stored cal so it triggers again
-    flow.set('thermoCal_currentCal_office', -100); // Force mismatch
-    flow.set('thermoCal_cooldown_office', 0); // Reset cooldown manually
-
-    let res2 = runTestFn({ ...baseMsg, ts: Date.now() + 1000 }, flow, node);
-    assert(res2 !== null, "Action 2 should pass");
-
-    // ACTION 3 (Blocked - Limit 2 reached)
-    console.log("  > Triggering Action 3 (Should Block)");
-    flow.set('thermoCal_currentCal_office', -100);
-    flow.set('thermoCal_cooldown_office', 0);
-
-    let res3 = runTestFn({ ...baseMsg, ts: Date.now() + 2000 }, flow, node);
-    assert(res3 === null, "Action 3 should be blocked by Rate Limit");
-
-    // ACTION 4 (Allowed after Window Shift?)
-
-    console.log("  > Triggering Action 4 (Future - Should Pass)");
-    flow.set('thermoCal_currentCal_office', -100);
-    flow.set('thermoCal_cooldown_office', 0);
-
-    // 61 seconds later
-    let futureTs = Date.now() + (61 * 1000); // Seconds now
-    let res4 = runTestFn({ ...baseMsg, ts: futureTs }, flow, node);
-    assert(res4 !== null, "Action 4 should pass (Window shifted)");
+    // Check that state WAS updated despite suppression
+    const storedCal = flow.get(`thermoCal_currentCal_${locId}`);
+    assert(storedCal === 1, "Thermostat state should be updated even if calc is suppressed");
 });

@@ -49,15 +49,10 @@ const CONFIG = {
     debug: false,
 
     step: 0.2,                  // Calibration step
-    throttle: {
-        limit: 5,           // Max number of calibration actions...
-        windowSeconds: 3600 // ...per this many seconds (1 hour)
-    },
-
     // Per-Location Overrides
     locations: {
         "office": { 
-             throttle: { limit: 10, windowSeconds: 1800 } // Example: 10 actions per 30 mins
+             // Device-specific settings can go here
         }
     },
 
