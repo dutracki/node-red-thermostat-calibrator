@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2025-12-15
+
+### Added
+- **Rate Limiting**: New `throttle` configuration to prevent excessive calibration commands (default: 5 actions per hour).
+- **Per-Location Config**: `throttle` settings can now be overridden per location in `CONFIG.locations`.
+- **AI-Ready Documentation**: Refactored `function.js` with strict JSDoc, `@intent` comments, and explicit context for better parsing by AI agents.
+
+### Changed
+- **Rate Limit Window**: Changed `windowMinutes` to `windowSeconds` for more granular control.
+- **Config Defaults**: Updated discovery rules to prioritize matched Zigbee2MQTT topics.
+
 ## [2.1.1] - 2025-12-15
 
 ### Fixed

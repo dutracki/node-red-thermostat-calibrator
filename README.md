@@ -49,6 +49,19 @@ const CONFIG = {
     debug: false,
 
     step: 0.2,                  // Calibration step
+    throttle: {
+        limit: 5,           // Max number of calibration actions...
+        windowSeconds: 3600 // ...per this many seconds (1 hour)
+    },
+
+    // Per-Location Overrides
+    locations: {
+        "office": { 
+             throttle: { limit: 10, windowSeconds: 1800 } // Example: 10 actions per 30 mins
+        }
+    },
+
+    // Prefix for Node-RED internal storage keys
     storePrefix: 'thermoCal_',  // Internal state prefix
     contextStore: 'default',    // 'default' (RAM) or 'file' (Persistence)
 
@@ -63,17 +76,17 @@ const CONFIG = {
     // Discovery Rules: Checked in order. First match wins.
     discovery: [
         // 1. Secondary Sensors (Weight 0.5)
-        // Matches: sensor.temp_office_2 -> Location: office
+        // Matches: zigbee2mqtt/temp_office_2 -> Location: office
         { 
-            pattern: 'sensor\\.temp_(.*)_2', 
+            pattern: 'zigbee2mqtt/temp_(.*)_2', 
             type: 'sensor', 
             baseWeight: 0.5 
         },
         
         // 2. Primary Sensors (Weight 1.0)
-        // Matches: sensor.temp_office -> Location: office
+        // Matches: zigbee2mqtt/temp_office -> Location: office
         { 
-            pattern: 'sensor\\.temp_(.*)', 
+            pattern: 'zigbee2mqtt/temp_(.*)', 
             type: 'sensor', 
             baseWeight: 1.0 
         },
