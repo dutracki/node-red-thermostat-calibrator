@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2025-12-15
+
+### Fixed
+- **Cooldown Logic**: Moved cooldown check to the "Action" phase. Sensor data is now correctly ingested even during the 5-second cooldown period, preventing data loss when a sensor updates immediately after a calibration event.
+
+## [2.1.0] - 2025-12-15
+
+### Added
+- **Debug Mode**: Added `debug: true` flag to `CONFIG`. When enabled, it logs detailed info about incoming messages, regex matching, weights, and calculation steps to the Node-RED debug panel.
+
+---
+
+## [2.0.0] - 2025-12-15
+
+### Added
+- **Multi-Sensor Aggregation**: Supports calculating weighted average from multiple sensors in a single room.
+- **Regex Discovery**: New `discovery` configuration array allowing powerful regex matching for device identification.
+- **Device Weighting**: Configurable `baseWeight` per discovery rule (e.g., secondary sensors count for 50%).
+- **Time-Based Weighting**: Sensor readings decay in importance over time (Fresh/Normal/Old/Very Old). Readings >30 mins are ignored.
+
+### Changed
+- **BREAKING**: Replaced `autoPrefixes` and `customMap` with the unified `discovery` rules array. Users must migrate their configuration.
+- Internal state storage for sensors now uses an array of readings (`sensorReadings_[location]`) instead of a single value.
+
+### Fixed
+- Improved type safety for floating point calculations in strict mode.
+
+---
+
 ## [1.0.1] - 2025-12-05
 
 ### Fixed
