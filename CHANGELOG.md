@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Calculation Stability**: Replaced discrete time-weight thresholds with **linear interpolation**. Previously, when sensor age crossed threshold boundaries (5m, 14m, 22m, 30m), weights jumped abruptly (e.g., 0.4 → 0.1), causing calibration instability between rapid thermostat updates. Now weights transition smoothly (e.g., 0.4050 → 0.3962).
+- **Oscillation Prevention**: Added **hysteresis** to the calibration decision gate. The system now requires the calibration deviation to exceed 0.75× step size (0.15°C) before triggering a change, preventing flip-flopping between adjacent calibration values when thermostat temperature fluctuates at boundaries.
 
 ## [2.2.1] - 2025-12-15
 

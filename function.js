@@ -304,8 +304,13 @@ const newCalibration = roundToStep(newCalibrationUnrounded, CONFIG.step);
 
 if (CONFIG.debug) log(`Calc: RawInternal=${rawInternal} | NewCalUnrounded=${newCalibrationUnrounded.toFixed(2)} | FinalCal=${newCalibration}`);
 
-// 5. UPDATE EXECUTION (Decision Gate)
-if (newCalibration !== storedCal) {
+// 5. UPDATE EXECUTION (Decision Gate with Hysteresis)
+// @intent: Prevent oscillation by requiring significant deviation before acting.
+// Hysteresis: Only change if the unrounded deviation exceeds half a step.
+const deviation = Math.abs(newCalibrationUnrounded - storedCal);
+const hysteresisThreshold = CONFIG.step * 0.75; // 0.15°C for 0.2 step
+
+if (newCalibration !== storedCal && deviation > hysteresisThreshold) {
 
     // 5a. COOLDOWN CHECK
     // @intent: Prioritize data freshness (Ingestion) over action. Action is blocked, but data was already saved in Step 3.
