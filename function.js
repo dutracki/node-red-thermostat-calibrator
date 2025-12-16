@@ -92,8 +92,6 @@ const loc = dev.loc;
 const state = getState(loc);
 
 // --- INGESTION ---
-let isSensorUpdate = false;
-
 if (dev.type === 'sensor') {
     const temp = msg.payload?.temperature;
     if (typeof temp !== 'number') return null;
@@ -101,7 +99,6 @@ if (dev.type === 'sensor') {
     state.sensors[topic] = { temp, ts: now, weight: dev.weight };
     setState(loc, state);
     log(`[${loc}] Sensor ${topic.split('/').pop()}: ${temp}°C`);
-    isSensorUpdate = true;
 
 } else if (dev.type === 'thermostat') {
     const temp = msg.payload?.local_temperature;
@@ -110,15 +107,11 @@ if (dev.type === 'sensor') {
 
     state.thermostat = { topic, temp, cal, ts: now };
     setState(loc, state);
-    log(`[${loc}] Thermo stored: cal=${cal}`);
-    // Thermostat update only stores state, does NOT trigger calculation
-    return null;
+    log(`[${loc}] Thermo: cal=${cal}`);
 }
 
-// --- CALCULATION (only on sensor update) ---
-if (!isSensorUpdate) return null;
-
-// Need thermostat data to calculate
+// --- CALCULATION (on both sensor AND thermostat update) ---
+// Need thermostat data
 if (!state.thermostat) {
     log(`[${loc}] Waiting for thermostat`);
     return null;
