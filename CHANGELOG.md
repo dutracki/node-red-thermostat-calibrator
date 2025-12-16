@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2025-12-16
+
+### Fixed
+- **Calculation Stability**: Replaced discrete time-weight thresholds with **linear interpolation**. Previously, when sensor age crossed threshold boundaries (5m, 14m, 22m, 30m), weights jumped abruptly (e.g., 0.4 → 0.1), causing calibration instability between rapid thermostat updates. Now weights transition smoothly (e.g., 0.4050 → 0.3962).
+
 ## [2.2.1] - 2025-12-15
 
 ### Added

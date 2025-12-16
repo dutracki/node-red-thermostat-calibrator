@@ -116,17 +116,32 @@ function identifyDevice(topic) {
 }
 
 /**
- * Calculates the time-decay weight for a sensor reading.
- * @context Data_Quality - Older data is less reliable.
+ * Calculates the time-decay weight for a sensor reading using linear interpolation.
+ * @context Data_Quality - Older data is less reliable. Smooth decay prevents calculation instability.
  * @param {number} ageMinutes - Age of the reading in minutes.
  * @returns {number} Weight multiplier (0.0 - 1.0).
  */
 function getWeightForAge(ageMinutes) {
-    if (ageMinutes <= CONFIG.timeWeights.fresh.maxAge) return CONFIG.timeWeights.fresh.weight;
-    if (ageMinutes <= CONFIG.timeWeights.normal.maxAge) return CONFIG.timeWeights.normal.weight;
-    if (ageMinutes <= CONFIG.timeWeights.old.maxAge) return CONFIG.timeWeights.old.weight;
-    if (ageMinutes <= CONFIG.timeWeights.veryOld.maxAge) return CONFIG.timeWeights.veryOld.weight;
-    return 0; // Too old
+    // Linear interpolation between defined points for smooth decay
+    const points = [
+        { age: 0, weight: 1.0 },
+        { age: CONFIG.timeWeights.fresh.maxAge, weight: CONFIG.timeWeights.fresh.weight },
+        { age: CONFIG.timeWeights.normal.maxAge, weight: CONFIG.timeWeights.normal.weight },
+        { age: CONFIG.timeWeights.old.maxAge, weight: CONFIG.timeWeights.old.weight },
+        { age: CONFIG.timeWeights.veryOld.maxAge, weight: CONFIG.timeWeights.veryOld.weight },
+        { age: CONFIG.timeWeights.veryOld.maxAge + 1, weight: 0 }
+    ];
+
+    if (ageMinutes <= 0) return points[0].weight;
+    if (ageMinutes >= points[points.length - 1].age) return 0;
+
+    for (let i = 0; i < points.length - 1; i++) {
+        if (ageMinutes <= points[i + 1].age) {
+            const t = (ageMinutes - points[i].age) / (points[i + 1].age - points[i].age);
+            return points[i].weight + t * (points[i + 1].weight - points[i].weight);
+        }
+    }
+    return 0;
 }
 
 // --- MAIN LOGIC ---

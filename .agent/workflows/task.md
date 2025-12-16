@@ -1,0 +1,34 @@
+# Codebase Analysis Task List
+
+- [x] Phase 1: File Discovery <!-- id: 0 -->
+    - [x] List all files recursively
+    - [x] Categorize files
+    - [x] Identify entry points
+    - [x] Create `project_structure.md`
+- [x] Phase 2: Dependency Analysis <!-- id: 1 -->
+    - [x] Locate package manifests
+    - [x] Parse dependencies
+    - [x] Check for outdated/vulnerable packages
+    - [x] Create `dependency_map.md`
+- [x] Phase 3: Code Architecture <!-- id: 2 -->
+    - [x] Read entry points
+    - [x] Trace imports
+    - [x] Identify patterns
+    - [x] Document API routes
+    - [x] Create `architecture_overview.md`
+- [x] Phase 4: Code Quality Assessment <!-- id: 3 -->
+    - [x] Check linting
+    - [x] Review code style
+    - [x] Analyze coverage
+    - [x] Identify code smells
+    - [x] Create `code_quality_report.md`
+- [x] Phase 5: Security Audit <!-- id: 4 -->
+    - [x] Scan for secrets
+    - [x] Review auth
+    - [x] Check input validation
+    - [x] Verify secure configs
+    - [x] Create `security_audit.md`
+- [x] Phase 6: Documentation Synthesis <!-- id: 5 -->
+    - [x] Compile executive summary
+    - [x] Create `analysis_summary.md`
+

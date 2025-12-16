@@ -16,7 +16,7 @@ A **robust** and **intelligent** Node-RED function to automatically calibrate Zi
 |---------|-------------|
 | 🎯 **Auto-Calibration** | Keeps thermostat `local_temperature` in sync with external sensors |
 | 🤹 **Multi-Sensor Support** | Aggregates readings from **multiple sensors** in one room |
-| ⏱️ **Time-Weighted Avg** | Prioritizes fresh readings; ignores data older than 30 mins |
+| ⏱️ **Time-Weighted Avg** | Smooth linear decay prioritizes fresh readings; ignores data older than 30 mins |
 | ⚖️ **Device Weighting** | Assign lower confidence (weights) to secondary sensors |
 | 🔍 **Regex Discovery** | Professional regex-based rule engine for device matching |
 | 🛡️ **Floating Point Safe** | Built-in rounding prevents JavaScript math errors |
