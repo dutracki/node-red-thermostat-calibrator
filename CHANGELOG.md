@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.2] - 2025-12-16
+## [3.0.0] - 2025-12-16
+
+### Changed
+- **BREAKING**: Complete refactor of storage model. Now uses unified per-location state: `{thermostat, sensors, lastCal, lastCalTime}`.
+- **Trigger**: Calculation runs on BOTH sensor AND thermostat updates (previously thermostat-only).
+- **Step**: Default changed to 0.01 for fine precision.
+- **Logging**: Significantly shortened for easy copy-paste debugging.
 
 ### Fixed
-- **Calculation Stability**: Replaced discrete time-weight thresholds with **linear interpolation**. Weights now transition smoothly instead of jumping at boundaries.
-- **Oscillation Prevention**: Added **hysteresis** (0.75× step) to prevent flip-flopping between adjacent calibration values.
-- **Sensor Timeout**: Extended from 30 to **60 minutes**. Sensors offline > 60 min are pruned; readings use time-weighted average with full precision (rounding only at final output).
+- Linear interpolation for time-weights (smooth decay).
+- Hysteresis (0.75×step) prevents oscillation.
+- Sensor timeout extended to 60 minutes.
 
 ## [2.2.1] - 2025-12-15
 

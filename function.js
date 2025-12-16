@@ -1,347 +1,182 @@
-
 /**
- * Advanced Thermostat Calibration Node (v2.0)
+ * Thermostat Calibration Node (v3.0)
  * 
- * Features:
- * - Supports 0.2°C calibration steps.
- * - Regex-based device discovery with custom weighting.
- * - Multi-sensor aggregation per room.
- * - Time-weighted averaging (Fresh/Normal/Old/Very Old).
+ * Refactored storage model:
+ * - Per-location state: {thermostat, sensors, lastCal, lastCalTime}
+ * - Triggers on BOTH sensor AND thermostat updates
+ * - 60-min sensor timeout, linear time-weight decay
+ * - Step: 0.01, hysteresis: 0.75×step
  */
 
 // --- CONFIGURATION ---
 const CONFIG = {
-    // Enable detailed logging for debugging regex, weights, and calculations
     debug: true,
-
-    // Per-Location Overrides
-    locations: {
-        "office": {
-            // Device-specific settings can go here (e.g. specific debounce?)
-        }
-    },
-
-    // Calibration precision
     step: 0.01,
-
-    // Prefix for Node-RED internal storage keys
-    storePrefix: 'thermoCal_',
+    hysteresisFactor: 0.75,
+    storePrefix: 'tc_',
     contextStore: 'default',
+    sensorTimeout: 60, // minutes
+    cooldownMs: 5000,
 
-    // Time-based weighting for sensor readings (in minutes)
-    timeWeights: {
-        fresh: { maxAge: 5, weight: 1.0 },   // 0-5 mins
-        normal: { maxAge: 15, weight: 0.8 }, // 5-15 mins
-        old: { maxAge: 30, weight: 0.5 },    // 15-30 mins
-        veryOld: { maxAge: 60, weight: 0.2 } // 30-60 mins
-        // >60 mins is ignored (sensor considered offline)
-    },
+    // Time weights: linear interpolation between these points
+    timeWeights: [
+        { age: 0, weight: 1.0 },
+        { age: 5, weight: 1.0 },
+        { age: 15, weight: 0.8 },
+        { age: 30, weight: 0.5 },
+        { age: 60, weight: 0.2 },
+        { age: 61, weight: 0 }
+    ],
 
-    // Discovery Rules: Checked in order. First match wins.
+    // Discovery: first match wins
     discovery: [
-        // 1. Secondary Sensor: "zigbee2mqtt/temp_office_2" -> Location: "office"
-        {
-            pattern: 'zigbee2mqtt/temp_(.*)_2',
-            type: 'sensor',
-            baseWeight: 0.5
-        },
-        // 2. Primary Sensor: "zigbee2mqtt/temp_office" -> Location: "office"
-        {
-            pattern: 'zigbee2mqtt/temp_(.*)',
-            type: 'sensor',
-            baseWeight: 1.0
-        },
-        // 3. Thermostat: "zigbee2mqtt/thermostat_office" -> Location: "office"
-        {
-            pattern: 'zigbee2mqtt/thermostat_(.*)',
-            type: 'thermostat'
-        }
+        { pattern: 'zigbee2mqtt/temp_(.*)_2', type: 'sensor', baseWeight: 0.5 },
+        { pattern: 'zigbee2mqtt/temp_(.*)', type: 'sensor', baseWeight: 1.0 },
+        { pattern: 'zigbee2mqtt/thermostat_(.*)', type: 'thermostat' }
     ]
 };
 
-// --- HELPER FUNCTIONS ---
+// --- HELPERS ---
+function log(m) { if (CONFIG.debug) node.warn(m); }
 
-/**
- * Logs a message to the Node-RED debug panel if debug mode is enabled.
- * @context Observability - filters noise unless debugging.
- * @param {string} msg - The message to log.
- */
-function log(msg) {
-    if (CONFIG.debug) {
-        node.warn(`[DEBUG] ${msg}`);
-    }
-}
-
-/**
- * Rounds a number to the nearest step (e.g., 0.5) to align with thermostat precision.
- * @param {number} value - Input value capable of floating point errors.
- * @param {number} step - Precision step (e.g. 0.1, 0.5).
- * @returns {number} The rounded value fixed to 1 decimal place.
- */
-function roundToStep(value, step) {
-    const inverse = 1.0 / step;
-    const rounded = Math.round(value * inverse) / inverse;
-    return parseFloat(rounded.toFixed(1));
-}
-
-/**
- * Identifies the device context from an MQTT topic using regex discovery rules.
- * @context Discovery - Maps loose MQTT topics to strict internal Location IDs.
- * @param {string} topic - MQTT topic string.
- * @returns {{id: string, type: 'sensor'|'thermostat', baseWeight: number}|null} Identified device or null.
- */
-function identifyDevice(topic) {
-    if (!topic) return null;
-
-    for (const rule of CONFIG.discovery) {
-        const regex = new RegExp(rule.pattern);
-        const match = topic.match(regex);
-        if (match) {
-            const id = match[1];
-            if (CONFIG.debug) {
-                log(`Topic '${topic}' matched rule '${rule.pattern}' -> Location: '${id}', Type: ${rule.type}, Weight: ${rule.baseWeight || 1.0}`);
-            }
-            return {
-                id: id,
-                type: rule.type,
-                baseWeight: rule.baseWeight !== undefined ? rule.baseWeight : 1.0
-            };
-        }
-    }
-
-    if (CONFIG.debug) {
-        log(`Topic '${topic}' did not match any discovery rules.`);
-    }
-    return null;
-}
-
-/**
- * Calculates the time-decay weight for a sensor reading using linear interpolation.
- * @context Data_Quality - Older data is less reliable. Smooth decay prevents calculation instability.
- * @param {number} ageMinutes - Age of the reading in minutes.
- * @returns {number} Weight multiplier (0.0 - 1.0).
- */
-function getWeightForAge(ageMinutes) {
-    // Linear interpolation between defined points for smooth decay
-    const points = [
-        { age: 0, weight: 1.0 },
-        { age: CONFIG.timeWeights.fresh.maxAge, weight: CONFIG.timeWeights.fresh.weight },
-        { age: CONFIG.timeWeights.normal.maxAge, weight: CONFIG.timeWeights.normal.weight },
-        { age: CONFIG.timeWeights.old.maxAge, weight: CONFIG.timeWeights.old.weight },
-        { age: CONFIG.timeWeights.veryOld.maxAge, weight: CONFIG.timeWeights.veryOld.weight },
-        { age: CONFIG.timeWeights.veryOld.maxAge + 1, weight: 0 }
-    ];
-
-    if (ageMinutes <= 0) return points[0].weight;
-    if (ageMinutes >= points[points.length - 1].age) return 0;
-
-    for (let i = 0; i < points.length - 1; i++) {
-        if (ageMinutes <= points[i + 1].age) {
-            const t = (ageMinutes - points[i].age) / (points[i + 1].age - points[i].age);
-            return points[i].weight + t * (points[i + 1].weight - points[i].weight);
+function getWeight(ageMin) {
+    const pts = CONFIG.timeWeights;
+    if (ageMin <= pts[0].age) return pts[0].weight;
+    if (ageMin >= pts[pts.length - 1].age) return 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+        if (ageMin <= pts[i + 1].age) {
+            const t = (ageMin - pts[i].age) / (pts[i + 1].age - pts[i].age);
+            return pts[i].weight + t * (pts[i + 1].weight - pts[i].weight);
         }
     }
     return 0;
 }
 
-// --- MAIN LOGIC ---
-
-if (CONFIG.debug) {
-    log(`Incoming: ${msg.topic} | Payload: ${JSON.stringify(msg.payload)}`);
+function round(v, step) {
+    return parseFloat((Math.round(v / step) * step).toFixed(2));
 }
 
-// 0. FILTER OUT COMMAND TOPICS
-if (msg.topic && msg.topic.endsWith('/set')) {
-    if (CONFIG.debug) log(`Ignoring command topic: ${msg.topic}`);
+function identify(topic) {
+    for (const r of CONFIG.discovery) {
+        const m = topic.match(new RegExp(r.pattern));
+        if (m) return { loc: m[1], type: r.type, weight: r.baseWeight || 1 };
+    }
     return null;
 }
 
-// 1. IDENTIFICATION
-// @intent: Convert raw MQTT topic into a controlled internal Location ID context.
-const deviceContext = identifyDevice(msg.topic);
-if (!deviceContext) {
-    // @HOOK: Unexpected_Device_Handler (Future: Alert user?)
-    return null;
-}
-
-const location = deviceContext.id;
-const lastSeenValue = msg.payload?.last_seen || null;
-const now = msg.ts || Date.now(); // Global definition
-
-// 2. DEDUPLICATION
-// @intent: Reduce processing load effectively, but allow some duplicates if logic requires freshness updates.
-if (lastSeenValue) {
-    // Only skip if the actual temperature payload is missing (heartbeat only)
-    if (msg.payload.temperature === undefined && msg.payload.local_temperature === undefined) {
-        if (CONFIG.debug) log("Skipping dedupe (heartbeat only, no temp data).");
-        return null;
-    }
-    const lastSeenKey = `${CONFIG.storePrefix}lastSeen_${msg.topic}`;
-    const previousLastSeen = flow.get(lastSeenKey, CONFIG.contextStore);
-    if (previousLastSeen === lastSeenValue) {
-        if (CONFIG.debug) log(`Duplicate message detected (last_seen: ${lastSeenValue})`);
-        return null;
-    }
-    flow.set(lastSeenKey, lastSeenValue, CONFIG.contextStore);
-}
-
-// 3. INGESTION (Update State)
-// @intent: Store the latest reading regardless of whether we act on it. Separation of Concerns: Data != Action.
-if (deviceContext.type === 'sensor') {
-    const temp = msg.payload.temperature;
-
-    // Validate Data Integrity
-    if (typeof temp !== 'number') {
-        node.error(`Invalid temp from ${msg.topic}: ${temp}`);
-        return null;
-    }
-
-    // Persist to Flow Context
-    const readingsKey = `${CONFIG.storePrefix}sensorReadings_${location}`;
-    let readings = flow.get(readingsKey, CONFIG.contextStore) || {};
-
-    // Note: We don't have 'change' variable logic here anymore for brevity/cleanliness unless we re-add it.
-    // Let's keep it simple.
-
-    readings[msg.topic] = {
-        temp: temp,
-        ts: now,
-        baseWeight: deviceContext.baseWeight
+function getState(loc) {
+    const key = `${CONFIG.storePrefix}${loc}`;
+    return flow.get(key, CONFIG.contextStore) || {
+        thermostat: null, // {topic, temp, cal, ts}
+        sensors: {},      // {topic: {temp, ts, weight}}
+        lastCal: null,
+        lastCalTime: 0
     };
-
-    if (CONFIG.debug) log(`Sensor Update for '${location}': ${msg.topic} = ${temp} (new) | Weight: ${deviceContext.baseWeight}`);
-
-    flow.set(readingsKey, readings, CONFIG.contextStore);
-
-    // Stop here. Wait for Thermostat to trigger the calibration check.
-    // @reason: Sensors update often. We only calibrate when the Thermostat (the actuator) reports in.
-    if (CONFIG.debug) log(`Waiting for first thermostat update to know target topic for ${location}.`);
-    return null;
-
-} else if (deviceContext.type === 'thermostat') {
-    // Thermostat is the "Trigger" for calibration checks.
-
-    // Normalize Zigbee payload variations
-    const currentLocalTemp = msg.payload.local_temperature;
-    const currentCalibration = msg.payload.local_temperature_calibration || 0;
-
-    if (currentLocalTemp === undefined) return null; // Not a temp update
-
-    // Save Thermostat State
-    flow.set(`${CONFIG.storePrefix}thermoTemp_${location}`, currentLocalTemp, CONFIG.contextStore);
-    flow.set(`${CONFIG.storePrefix}currentCal_${location}`, currentCalibration, CONFIG.contextStore);
-    flow.set(`${CONFIG.storePrefix}topicName_${location}`, msg.topic, CONFIG.contextStore); // Store target topic logic
-
-    if (CONFIG.debug) log(`Updating Thermostat Setup for '${location}': Temp=${currentLocalTemp}, Cal=${currentCalibration}`);
-
-    // 3b. EARLY EXIT (Feedback Loop Prevention)
-    // @intent: If we just sent a command, the thermostat sends an update. We must update state (above) but NOT trigger a new calculation.
-    const cooldownKey = `${CONFIG.storePrefix}cooldown_${location}`;
-    const lastUpdateTime = flow.get(cooldownKey, CONFIG.contextStore) || 0;
-    const COOLDOWN_MS = 5000;
-
-    if ((now - lastUpdateTime) < COOLDOWN_MS) {
-        if (CONFIG.debug) log(`[Info] Updates saved, but calculation suppressed due to recent action (Echo suppression).`);
-        return null;
-    }
-
-    // proceed to Calculation...
 }
 
-// 4. CALCULATION (Weighted Average)
-// @intent: Determine the "True" room temperature by aggregating all available sensors.
-const readingsKey = `${CONFIG.storePrefix}sensorReadings_${location}`;
-const readings = flow.get(readingsKey, CONFIG.contextStore) || {};
-const storedThermoTemp = flow.get(`${CONFIG.storePrefix}thermoTemp_${location}`, CONFIG.contextStore);
-const storedCal = flow.get(`${CONFIG.storePrefix}currentCal_${location}`, CONFIG.contextStore);
-const targetTopic = flow.get(`${CONFIG.storePrefix}topicName_${location}`, CONFIG.contextStore);
-
-if (!readings || Object.keys(readings).length === 0) return null;
-if (CONFIG.debug) log(`--- Starting Calculation for ${location} ---`);
-
-let totalWeightedTemp = 0;
-let totalWeight = 0;
-let validReadingsCount = 0;
-let validReadings = {}; // To cleanup old entries
-
-for (const topic in readings) {
-    const r = readings[topic];
-    const ageMinutes = (now - r.ts) / 60000;
-
-    // @logic: Decay weight based on data freshness
-    const timeWeight = getWeightForAge(ageMinutes);
-
-    if (timeWeight > 0) {
-        const finalWeight = r.baseWeight * timeWeight;
-        totalWeightedTemp += r.temp * finalWeight;
-        totalWeight += finalWeight;
-        validReadingsCount++;
-        validReadings[topic] = r; // Keep valid reading
-
-        if (CONFIG.debug) log(` + Reading: ${topic} | Temp: ${r.temp} | Age: ${ageMinutes.toFixed(1)}m (x${timeWeight}) * Base(x${r.baseWeight}) = FinalWeight ${finalWeight.toFixed(2)}`);
-    } else {
-        if (CONFIG.debug) log(` - Pruning: ${topic} (Age: ${ageMinutes.toFixed(1)}m > Max)`);
-    }
+function setState(loc, state) {
+    flow.set(`${CONFIG.storePrefix}${loc}`, state, CONFIG.contextStore);
 }
 
-// 4b. STORE CLEANED READINGS (Garbage Collection)
-flow.set(readingsKey, validReadings, CONFIG.contextStore);
+// --- MAIN ---
+const now = msg.ts || Date.now();
+const topic = msg.topic;
 
-if (validReadingsCount === 0) {
-    if (CONFIG.debug) log("No valid sensor readings available (all sensors offline > 60 min).");
+// Skip /set commands
+if (topic?.endsWith('/set')) return null;
+
+const dev = identify(topic);
+if (!dev) return null;
+
+const loc = dev.loc;
+const state = getState(loc);
+
+// --- INGESTION ---
+if (dev.type === 'sensor') {
+    const temp = msg.payload?.temperature;
+    if (typeof temp !== 'number') return null;
+
+    state.sensors[topic] = { temp, ts: now, weight: dev.weight };
+    setState(loc, state);
+    log(`[${loc}] Sensor ${topic.split('/').pop()}: ${temp}°C`);
+
+} else if (dev.type === 'thermostat') {
+    const temp = msg.payload?.local_temperature;
+    const cal = msg.payload?.local_temperature_calibration ?? 0;
+    if (temp === undefined) return null;
+
+    state.thermostat = { topic, temp, cal, ts: now };
+    setState(loc, state);
+    log(`[${loc}] Thermo: ${temp}°C, cal=${cal}`);
+}
+
+// --- CALCULATION ---
+// Need thermostat data to calculate
+if (!state.thermostat) {
+    log(`[${loc}] No thermostat data yet`);
     return null;
 }
 
-const avgSensorTemp = totalWeightedTemp / totalWeight;
-
-if (CONFIG.debug) log(`Results: AvgMsgTemp=${avgSensorTemp.toFixed(2)}, ThermoTemp=${storedThermoTemp}, CurrentCal=${storedCal}`);
-
-// 4c. CALCULATE NEW CALIBRATION
-// Formula: RealTemp = (RawInternal + Cal) => RawInternal = RealTemp - Cal
-const rawInternal = storedThermoTemp - storedCal;
-const newCalibrationUnrounded = avgSensorTemp - rawInternal;
-const newCalibration = roundToStep(newCalibrationUnrounded, CONFIG.step);
-
-if (CONFIG.debug) log(`Calc: RawInternal=${rawInternal} | NewCalUnrounded=${newCalibrationUnrounded.toFixed(2)} | FinalCal=${newCalibration}`);
-
-// 5. UPDATE EXECUTION (Decision Gate with Hysteresis)
-// @intent: Prevent oscillation. Compare unrounded values for precision.
-// Rounding is only applied to the final output calibration value.
-const deviation = Math.abs(newCalibrationUnrounded - storedCal);
-const hysteresisThreshold = CONFIG.step * 0.75;
-
-if (newCalibration !== storedCal && deviation > hysteresisThreshold) {
-
-    // 5a. COOLDOWN CHECK
-    // @intent: Prioritize data freshness (Ingestion) over action. Action is blocked, but data was already saved in Step 3.
-    const cooldownKey = `${CONFIG.storePrefix}cooldown_${location}`;
-    const lastUpdateTime = flow.get(cooldownKey, CONFIG.contextStore) || 0;
-    const COOLDOWN_MS = 5000;
-
-    if ((now - lastUpdateTime) < COOLDOWN_MS) {
-        if (CONFIG.debug) log(`[Info] Calibration needed (-&gt; ${newCalibration}) but skipping due to cooldown (${COOLDOWN_MS - (now - lastUpdateTime)}ms).`);
-        return null;
-    }
-
-    // 5b. EXECUTE COMMAND
-    node.warn(`[Action] ${location} | Calibrating: ${storedCal} -> ${newCalibration} (AvgSensor: ${avgSensorTemp.toFixed(2)}, Thermo: ${storedThermoTemp})`);
-
-    msg.topic = `${targetTopic}/set`;
-    msg.payload = {
-        local_temperature_calibration: newCalibration
-    };
-
-    flow.set(`${CONFIG.storePrefix}currentCal_${location}`, newCalibration, CONFIG.contextStore);
-    flow.set(cooldownKey, now, CONFIG.contextStore);
-
-    return msg;
-} else {
-    if (CONFIG.debug) {
-        if (deviation <= hysteresisThreshold) {
-            log("No change needed (Deviation < Hysteresis threshold).");
-        } else {
-            log("No change needed (Calibration already matches).");
-        }
-    }
+// Cooldown check
+if (now - state.lastCalTime < CONFIG.cooldownMs) {
+    log(`[${loc}] Cooldown active`);
     return null;
 }
+
+// Aggregate sensor readings
+let sumWT = 0, sumW = 0, validCount = 0;
+const validSensors = {};
+
+for (const [t, s] of Object.entries(state.sensors)) {
+    const age = (now - s.ts) / 60000;
+    const tw = getWeight(age);
+    if (tw > 0) {
+        const fw = s.weight * tw;
+        sumWT += s.temp * fw;
+        sumW += fw;
+        validCount++;
+        validSensors[t] = s;
+    }
+}
+
+// Update sensors (prune old)
+state.sensors = validSensors;
+setState(loc, state);
+
+if (validCount === 0) {
+    log(`[${loc}] No valid sensors`);
+    return null;
+}
+
+const avgTemp = sumWT / sumW;
+const thermo = state.thermostat;
+const rawInternal = thermo.temp - thermo.cal;
+const newCalExact = avgTemp - rawInternal;
+const newCalRounded = round(newCalExact, CONFIG.step);
+
+log(`[${loc}] Avg=${avgTemp.toFixed(2)} Raw=${rawInternal.toFixed(2)} NewCal=${newCalExact.toFixed(3)}→${newCalRounded}`);
+
+// Decision gate
+const deviation = Math.abs(newCalExact - thermo.cal);
+const threshold = CONFIG.step * CONFIG.hysteresisFactor;
+
+if (newCalRounded === thermo.cal) {
+    log(`[${loc}] No change (same)`);
+    return null;
+}
+
+if (deviation <= threshold) {
+    log(`[${loc}] No change (dev ${deviation.toFixed(3)} < ${threshold.toFixed(3)})`);
+    return null;
+}
+
+// Action
+state.lastCal = newCalRounded;
+state.lastCalTime = now;
+setState(loc, state);
+
+log(`[${loc}] ACTION: ${thermo.cal}→${newCalRounded}`);
+
+msg.topic = `${thermo.topic}/set`;
+msg.payload = { local_temperature_calibration: newCalRounded };
+return msg;
