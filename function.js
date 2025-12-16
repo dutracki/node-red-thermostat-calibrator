@@ -22,7 +22,7 @@ const CONFIG = {
     },
 
     // Calibration precision
-    step: 0.2,
+    step: 0.01,
 
     // Prefix for Node-RED internal storage keys
     storePrefix: 'thermoCal_',
@@ -31,10 +31,10 @@ const CONFIG = {
     // Time-based weighting for sensor readings (in minutes)
     timeWeights: {
         fresh: { maxAge: 5, weight: 1.0 },   // 0-5 mins
-        normal: { maxAge: 14, weight: 0.8 }, // 5-14 mins
-        old: { maxAge: 22, weight: 0.4 },    // 14-22 mins
-        veryOld: { maxAge: 30, weight: 0.1 } // 22-30 mins
-        // >30 mins is ignored
+        normal: { maxAge: 15, weight: 0.8 }, // 5-15 mins
+        old: { maxAge: 30, weight: 0.5 },    // 15-30 mins
+        veryOld: { maxAge: 60, weight: 0.2 } // 30-60 mins
+        // >60 mins is ignored (sensor considered offline)
     },
 
     // Discovery Rules: Checked in order. First match wins.
@@ -288,7 +288,7 @@ for (const topic in readings) {
 flow.set(readingsKey, validReadings, CONFIG.contextStore);
 
 if (validReadingsCount === 0) {
-    if (CONFIG.debug) log("No valid (fresh) readings available.");
+    if (CONFIG.debug) log("No valid sensor readings available (all sensors offline > 60 min).");
     return null;
 }
 
@@ -305,10 +305,10 @@ const newCalibration = roundToStep(newCalibrationUnrounded, CONFIG.step);
 if (CONFIG.debug) log(`Calc: RawInternal=${rawInternal} | NewCalUnrounded=${newCalibrationUnrounded.toFixed(2)} | FinalCal=${newCalibration}`);
 
 // 5. UPDATE EXECUTION (Decision Gate with Hysteresis)
-// @intent: Prevent oscillation by requiring significant deviation before acting.
-// Hysteresis: Only change if the unrounded deviation exceeds half a step.
+// @intent: Prevent oscillation. Compare unrounded values for precision.
+// Rounding is only applied to the final output calibration value.
 const deviation = Math.abs(newCalibrationUnrounded - storedCal);
-const hysteresisThreshold = CONFIG.step * 0.75; // 0.15°C for 0.2 step
+const hysteresisThreshold = CONFIG.step * 0.75;
 
 if (newCalibration !== storedCal && deviation > hysteresisThreshold) {
 
@@ -336,6 +336,12 @@ if (newCalibration !== storedCal && deviation > hysteresisThreshold) {
 
     return msg;
 } else {
-    if (CONFIG.debug) log("No change needed (Deviation < Step).");
+    if (CONFIG.debug) {
+        if (deviation <= hysteresisThreshold) {
+            log("No change needed (Deviation < Hysteresis threshold).");
+        } else {
+            log("No change needed (Calibration already matches).");
+        }
+    }
     return null;
 }
